@@ -12,32 +12,42 @@ export class VscodeOnEc2ForPrototypingStack extends cdk.Stack {
     const paramNode: string = this.node.tryGetContext('node')!;
 
     const vpc = new ec2.Vpc(this, 'VSCodeVPC', {});
-    const host = new ec2.BastionHostLinux(this, 'VSCodeBastionHost', {
+
+    // Security Group to allow HTTP, HTTPS, SSH, ICMP (Ping), and port 8080 access
+    const securityGroup = new ec2.SecurityGroup(this, 'VSCodeSecurityGroup', {
+      vpc,
+      allowAllOutbound: true,
+    });
+
+    securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP');
+    securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS');
+    securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(22), 'Allow SSH');
+    securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.icmpPing(), 'Allow ICMP Ping');
+    securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(8080), 'Allow port 8080'); // Added port 8080
+
+    // Create an EC2 instance with a public IP
+    const instance = new ec2.Instance(this, 'VSCodeInstance', {
       vpc,
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MEDIUM),
       machineImage: ec2.MachineImage.latestAmazonLinux2023(),
-      //
-      // To confirm the device name
-      // ```
-      // aws ec2 describe-images --region ap-northeast-1 --image-ids ami-0506f0f56e3a057a4
-      // ```
-      //
+      securityGroup,
       blockDevices: [
         {
           deviceName: '/dev/xvda',
           volume: ec2.BlockDeviceVolume.ebs(paramVolume),
         },
       ],
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC }, // Ensure the instance is in a public subnet
     });
 
-    host.instance.addToRolePolicy(
+    instance.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['*'],
         resources: ['*'],
       })
     );
 
-    host.instance.addUserData(
+    instance.addUserData(
       `#!/bin/bash
 sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
 sudo sh -c 'echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc" > /etc/yum.repos.d/vscode.repo'
@@ -73,11 +83,11 @@ EOF`,
     );
 
     new cdk.CfnOutput(this, 'InstanceID', {
-      value: host.instanceId,
+      value: instance.instanceId,
     });
 
-    new cdk.CfnOutput(this, 'PrivateIP', {
-      value: host.instancePrivateIp,
+    new cdk.CfnOutput(this, 'PublicIP', {  // Output the public IP
+      value: instance.instancePublicIp,
     });
   }
 }
